@@ -9,17 +9,48 @@ const cors = require("cors");
 
 // 4. mongodb atlas connection
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
 
 // Load environment variables from the .env file into process.env
 dotenv.config();
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
-const client = new MongoClient(process.env.MONGO_URI, {
+
+const uri = process.env.MONGO_URI || "http://localhost:3001";
+const JWKS = `${process.env.CLIENT_URL}/api/auth/jwks`;
+const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
     strict: true,
     deprecationErrors: true,
   },
 });
+const logger = (req, res, next) => {
+  console.log(`${req.method} ${req.url}`);
+  next();
+};
+const verifyToken = async (req, res, next) => {
+  const { authorization } = req.headers;
+
+  // হেডার বা টোকেন না থাকলে মাঝপথেই আটকে দাও
+  if (!authorization || !authorization.startsWith("Bearer ")) {
+    return res.status(401).json({ message: "Unauthorized! Token missing." });
+  }
+  const token = authorization.split(" ")[1];
+  console.log("authorization token: ", token);
+  // console.log(req.headers, "from verify token");
+  if (!token) {
+    return res.status(401).json({ message: "Unauthorize" });
+  }
+  try {
+    const jwks = createRemoteJWKSet(new URL(JWKS));
+    const { payload } = await jwtVerify(token, jwks);
+    req.user = payload;
+    console.log(req.user);
+  } catch (error) {
+    console.error("Token validation failed:", error);
+    return res.status(401).json({ message: "Unauthorize" });
+  }
+  next();
+};
 let coursesCollection;
 async function run() {
   try {
@@ -31,12 +62,18 @@ async function run() {
     const db = client.db("mentoraDB");
     coursesCollection = db.collection("courses");
     app.get("/courses", async (req, res) => {
+      // console.log(req.query);
+      const { search } = req.query;
+      let query = {};
+      if (search) {
+        query = { title: { $eq: search } };
+      }
       const cursor = coursesCollection.find();
       const result = await cursor.toArray();
       console.log("result: ", result.length);
       res.send(result);
     });
-    app.get("/courses/:courseID", async (req, res) => {
+    app.get("/courses/:courseID", logger, verifyToken, async (req, res) => {
       // const courseID =req.params.courseID;
       const { courseID } = req.params;
       // console.log("CourseID: ", courseID);
